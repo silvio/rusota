@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+	<title>OTA Package list</title>
+	<!-- no icon requests -->
+	<link rel="icon" href="data:," />
+	 <style>
+		table { border-collapse: collapse; width: 100%; }
+		td, th { border: 1px solid #ddd; padding: 8px; }
+		tr:nth-child(even) { background-color: #f2f2f2; }
+		tr:hover { background-color: #ddd; }
+		th { background-color: #00c3ff; color: white; }
+	 </style>
+</head>
+
+<body>
+	<table>
+		<thead>
+			<tr>
+				<th>Checksum</th><th>DateTime</th><th>Size</th><th>File</th>
+			</tr>
+		</thead>
+		<tbody>
+		{% for package in packages | sort(attribute="datetime") %}
+			<tr>
+				<td>{{package.checksum}}</td><td>{{package.datetime}}</td><td>{{package.size}}</td><td><a href="/{{package.datetime}}">{{package.filename}}</a></td>
+			</tr>
+		{% endfor %}
+		</tbody>
+	</table>
+</body>
+</html>
