@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+    - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{github.repository}}
+
+jobs:
+  create-release:
+    name: create-release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Create GitHub release
+        id: release
+        uses: ncipollo/release-action@v1
+
+  build-release:
+    name: build-release
+    needs: [ "create-release" ]
+    runs-on: ${{matrix.os}}
+    env:
+      CARGO: cargo
+      RUST_BACKTRACE: 1
+    strategy:
+      matrix:
+        build: [linux]
+        include:
+        - build: linux
+          os: ubuntu-22.04
+          rust: nightly
+          target: x86_64-unknown-linux-musl
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install packages
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          command -V sudo || {
+            apt-get update -y
+            apt-get install -y --no-install-recommends sudo
+          }
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            asciidoctor zsh xz-utils liblz4-tool musl-tools brotli zstd make
+
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{matrix.rust}}
+          target: ${{matrix.target}}
+          default: true
+          override: true
+
+      - name: Build release binary and docker image
+        run: |
+          make REGISTRY="${{env.REGISTRY}}" TARGET="${{matrix.target}}" REGISTRY_USERNAME="${{github.repository_owner}}" docker-build
+
+      - name: build-archive
+        shell: bash
+        run: |
+          tmpfolder="$(mktemp -d)/rusota-${{github.ref_name}}"
+          mkdir -p "${tmpfolder}"
+          cp "target/${{matrix.target}}/release/rusota" "${tmpfolder}"
+          cp -a templates "${tmpfolder}"
+          mkdir -p "${tmpfolder}/ota"
+          tar -C "${tmpfolder}" -cvzf "rusota-${{github.ref_name}}-${{matrix.target}}.tar.gz" .
+
+      - name: Upload release archive
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          files: "rusota-${{github.ref_name}}-${{matrix.target}}.tar.gz"
+          tag_name: "${{github.ref_name}}"
+
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+        with:
+          registry: ${{env.REGISTRY}}
+          username: ${{github.actor}}
+          password: ${{secrets.GITHUB_TOKEN}}
+
+      - name: build and push
+        shell: bash
+        run: |
+          # silvio/rusota:{latest,sha} already build. Only the version tag is missing
+          docker tag "${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${{github.sha}}" "${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${{github.ref_name}}"
+          for tag in latest "${{github.sha}}" "${{github.ref_name}}"; do
+            docker push "${{env.REGISTRY}}/${{env.IMAGE_NAME}}:${tag}"
+          done
+
