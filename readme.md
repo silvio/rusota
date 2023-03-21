@@ -6,6 +6,11 @@ Small OTA server for Android/LineageOS Over-the-Air Updates.
 
 # How To Use
 
+## Docker
+
+A release is also as docker image available. The docker image are tagged with
+the version number.
+
 
 # Ideas / Implementation details
 
@@ -26,3 +31,4 @@ Small OTA server for Android/LineageOS Over-the-Air Updates.
     * [ ] x86/musl
   * [ ] docker image, label should contain version number
   * [ ] docker image, label should contain commit hash
+* [ ] To be independent from CI/CD, we should create scripts and use them
