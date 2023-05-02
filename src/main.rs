@@ -90,14 +90,21 @@ pub async fn root_otapackage(datetime: String, ota: &State<OtaManager>) -> Optio
 }
 
 #[launch]
-fn rocket() -> _ {
+async fn rocket() -> _ {
     env_logger::init();
     info!("Log initialized ...");
     let mut otas = OtaManager::new(OTA_ROOT.to_string());
-    otas.populate();
+    match otas.populate().await {
+        Ok(_) => {
+            info!("OTAS populated");
+        },
+        Err(e) => {
+            error!("otas could not populated: {:?}", e);
+            unimplemented!();
+        },
+    };
 
     dotenv::dotenv().ok();
-
     rocket::build()
         .manage(otas)
         .mount("/", routes![

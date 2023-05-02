@@ -1,10 +1,12 @@
 
 extern crate md5;
 
-use std::{fmt, fs, collections::HashMap};
-use rocket::serde::{Deserialize, Serialize};
+use futures::{ SinkExt, StreamExt, };
 use log::{debug, trace};
+use notify::*;
+use rocket::serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use std::{fmt, fs, collections::HashMap};
 
 use crate::package::{Package, RomType};
 
@@ -23,8 +25,106 @@ impl OtaManager {
         }
     }
 
-    pub fn populate(&mut self) -> &OtaManager {
+    pub async fn populate(&mut self) -> Result<&OtaManager> {
         debug!("Populating OtaManager");
+
+        futures::executor::block_on(async {
+            if let Err(e) = self.async_watch().await {
+                println!("error: {:?}", e);
+            }
+        });
+
+        match self.update_rootfs().await {
+            Ok(_) => {
+                info!("OTAS populated");
+            },
+            Err(e) => {
+                error!("otas could not populated: {:?}", e);
+                unimplemented!();
+            },
+        };
+
+        debug!("before cleanup\n{:?}", self.packages);
+        self.cleanup();
+        debug!("after cleanup\n{:?}", self.packages);
+
+        Ok(self)
+    }
+
+    /// cleanup the packages list with packages which are not complete
+    /// RETRUN: true when changes are done, false if not.
+    fn cleanup(&mut self) -> bool {
+        let len_before = self.packages.len();
+
+        self.packages.retain(|_, v| v.complete());
+        let len_after = self.packages.len();
+
+        trace!("cleanup: before/after:{}/{}", len_before, len_after);
+
+        len_before != len_after
+    }
+
+    pub fn list(&self) -> Vec<Package> {
+        let mut packages = Vec::<Package>::new();
+        for (_, value) in self.packages.iter() {
+            packages.push(value.clone());
+        }
+        packages
+    }
+
+    pub fn find_by_checksum(&self, checksum: String) -> String {
+        for package in &self.list() {
+            if checksum == package.checksum {
+                return format!("{}/{}", self.path, package.filename);
+            }
+        }
+
+        return format!("Package with chcksum {} not found!", checksum);
+    }
+
+    pub fn find_by_datetime(&self, datetime: u64) -> String {
+        for package in &self.list() {
+            if datetime == package.datetime {
+                return format!("{}/{}", self.path, package.filename);
+            }
+        }
+
+        return format!("Package with datetime {} not found!", datetime);
+    }
+
+    pub async fn async_watcher(&self) -> notify::Result<(notify::RecommendedWatcher, futures::channel::mpsc::Receiver<notify::Result<notify::Event>>)> {
+        let (mut tx, rx) = futures::channel::mpsc::channel(1);
+
+        let watcher = RecommendedWatcher::new(move |res| {
+            futures::executor::block_on(async {
+                tx.send(res).await.unwrap();
+            })
+        }, Config::default())?;
+
+        Ok((watcher, rx))
+    }
+
+    pub async fn async_watch(&mut self) -> Result<()> {
+        let (mut watcher, mut rx) = self.async_watcher().await?;
+
+        watcher.watch(self.path.as_ref(), RecursiveMode::Recursive)?;
+
+        while let Some(res) = rx.next().await {
+            match res {
+                Ok(ref event) => {
+                    if event.kind.is_other() { continue };
+
+                    self.update_rootfs().await?;
+                },
+                Err(e) => println!("error (ignored): {:?}", e),
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn update_rootfs(&mut self) -> Result<()> {
+        self.packages = HashMap::default();
 
         for entry in fs::read_dir(&self.path).unwrap() {
             let entry = entry.unwrap();
@@ -100,48 +200,7 @@ impl OtaManager {
         self.cleanup();
         debug!("after cleanup\n{:?}", self.packages);
 
-        self
-    }
-
-    /// cleanup the packages list with packages which are not complete
-    /// RETRUN: true when changes are done, false if not.
-    fn cleanup(&mut self) -> bool {
-        let len_before = self.packages.len();
-
-        self.packages.retain(|_, v| v.complete());
-        let len_after = self.packages.len();
-
-        trace!("cleanup: before/after:{}/{}", len_before, len_after);
-
-        len_before != len_after
-    }
-
-    pub fn list(&self) -> Vec<Package> {
-        let mut packages = Vec::<Package>::new();
-        for (_, value) in self.packages.iter() {
-            packages.push(value.clone());
-        }
-        packages
-    }
-
-    pub fn find_by_checksum(&self, checksum: String) -> String {
-        for package in &self.list() {
-            if checksum == package.checksum {
-                return format!("{}/{}", self.path, package.filename);
-            }
-        }
-
-        return format!("Package with chcksum {} not found!", checksum);
-    }
-
-    pub fn find_by_datetime(&self, datetime: u64) -> String {
-        for package in &self.list() {
-            if datetime == package.datetime {
-                return format!("{}/{}", self.path, package.filename);
-            }
-        }
-
-        return format!("Package with datetime {} not found!", datetime);
+        Ok(())
     }
 }
 
