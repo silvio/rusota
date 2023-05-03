@@ -17,7 +17,7 @@ pub enum RomType {
     UNKNOWN,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
 pub struct Package {
     pub filename: String,
     pub size: u64,

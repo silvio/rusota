@@ -1,6 +1,7 @@
 
 extern crate md5;
 
+use anyhow::Result;
 use futures::{ SinkExt, StreamExt, };
 use log::{debug, trace};
 use notify::*;
@@ -126,25 +127,35 @@ impl OtaManager {
     pub async fn update_rootfs(&mut self) -> Result<()> {
         self.packages = HashMap::default();
 
-        for entry in fs::read_dir(&self.path).unwrap() {
-            let entry = entry.unwrap();
+        // Find the id to identify the package (via name)
+        let suffixes: Vec<&'static str> = vec![".zip", ".zip.prop", ".zip.md5sum"];
+
+        for entry in fs::read_dir(&self.path)? {
+            let entry = entry?;
             let path = &entry.path();
             debug!("work on: {}", path.display());
 
             let suffix = match path.extension().clone() {
-                Some(x) => x.to_str().unwrap(),
+                Some(x) => {
+                    let Some(x) = x.to_str() else {
+                        debug!("Problem with unwrapping of path extension");
+                        continue
+                    };
+                    x
+                },
                 None => {
-                    debug!("Not interrested in this file");
+                    debug!("Problem with unwrapping of path extension");
                     continue;
                 }
             };
 
-            // Find the id to identify the package (via name)
-            let suffixes: Vec<&'static str> = vec![".zip", ".zip.prop", ".zip.md5sum"];
+            let Some(mut id) = path.to_str() else {
+                debug!("Problem with unwrapping of path");
+                continue;
+            };
 
-            let mut id = path.to_str().unwrap().clone();
-            for suffix in suffixes {
-                id = match id.strip_suffix(suffix) {
+            for el in &suffixes {
+                id = match id.strip_suffix(el) {
                     Some(x) => x,
                     None => id,
                 }
@@ -158,22 +169,25 @@ impl OtaManager {
                     debug!("zip file found, processing ...");
                     package.has_zip = true;
                     package.filename = format!("{}", &entry.file_name().into_string().unwrap());
-                    let metadata = fs::metadata(&entry.path()).unwrap();
+                    let metadata = fs::metadata(&entry.path())?;
                     package.size = metadata.len();
                 },
                 "prop" => {
                     let filecontent = fs::read_to_string(path).expect("path not found");
                     for line in filecontent.lines() {
                         if line.starts_with("#") { continue };
-                        let (key, value) = line.split_once("=").unwrap();
+                        let Some((key, value)) = line.split_once("=") else {
+                            debug!("Line contains no '='");
+                            continue;
+                        };
                         if key == "ro.system.build.date.utc" {
-                            package.datetime = u64::from_str_radix(value, 10).unwrap();
+                            package.datetime = u64::from_str_radix(value, 10)?;
                         }
                         if key == "ro.lineage.build.version" {
                             package.version = value.to_string();
                         }
                         if key == "ro.lineage.releasetype" {
-                            package.releasetype = RomType::from_str(value).unwrap();
+                            package.releasetype = RomType::from_str(value)?;
                         }
                     }
 
@@ -181,7 +195,11 @@ impl OtaManager {
                 },
                 "md5sum" => {
                     let filecontent = fs::read_to_string(path).expect("path not found");
-                    let checksum = filecontent.split_ascii_whitespace().next().unwrap();
+                    let Some(checksum) = filecontent.split_ascii_whitespace().next() else {
+                        debug!("Cannot extract md5sum from checksum file");
+                        self.packages.remove_entry(id);
+                        continue;
+                    };
                     debug!("Cheksum found: {}", checksum);
                     package.checksum = checksum.to_string();
 
@@ -189,6 +207,7 @@ impl OtaManager {
                 },
                 _ => {
                     debug!("Not interrested in this file");
+                    self.packages.remove_entry(id);
                     continue;
                 },
             };
